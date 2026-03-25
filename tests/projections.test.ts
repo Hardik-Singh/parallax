@@ -90,4 +90,38 @@ describe('graph projections', () => {
     // Should have at least CONSUMED and PRODUCED
     expect(execGraph.relations.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('execution graph includes CAUSED relation between producer and consumer actions', async () => {
+    const producer = await p.planAction(runId, {
+      type: 'produce',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+    await p.executeAction(producer.id);
+
+    const run = await p.getRun(runId);
+    const producedArtifactId = run.artifactIds[0];
+
+    const consumer = await p.planAction(runId, {
+      type: 'consume',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [{ objectId: producedArtifactId }] },
+      agentId,
+      properties: {},
+    });
+    await p.executeAction(consumer.id);
+
+    const execGraph = await p.getExecutionGraph(runId);
+    expect(
+      execGraph.relations.some(
+        (rel) => rel.type === 'CAUSED' && rel.from === producer.id && rel.to === consumer.id,
+      ),
+    ).toBe(true);
+  });
 });

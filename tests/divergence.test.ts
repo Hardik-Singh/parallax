@@ -168,4 +168,90 @@ describe('divergence detection', () => {
     expect(Array.isArray(diff.events)).toBe(true);
     expect(typeof diff.summary).toBe('string');
   });
+
+  it('context scope violation is detected from accessed field instrumentation', async () => {
+    const run = await p.createRun(agentId);
+
+    const artifact = await p.createArtifact({
+      type: 'data',
+      producedByActionId: 'ext',
+      runId: run.id,
+      content: { allowed: true, secret: true },
+      reusable: false,
+      properties: {},
+    });
+
+    const action = await p.planAction(run.id, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId: run.id,
+      effectful: false,
+      declared: { inputs: [{ objectId: artifact.id, select: ['allowed'] }] },
+      agentId,
+      properties: {
+        accessedFields: {
+          [artifact.id]: ['allowed', 'secret'],
+        },
+      },
+    });
+
+    const obj = await p.findByHash(action.id) as ActionObject;
+    obj.observed = {
+      consumedInputIds: [artifact.id],
+      producedArtifactIds: [],
+      status: 'completed',
+    };
+    await (p as any).store.putObject(obj);
+
+    const div = await p.getDivergence(run.id);
+    expect(div.events.some((e) => e.type === 'context_scope_violation')).toBe(true);
+  });
+
+  it('effectful action re-executed is detected on replayed actions', async () => {
+    const run = await p.createRun(agentId);
+
+    const original = await p.planAction(run.id, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId: run.id,
+      effectful: true,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+
+    const originalObj = await p.findByHash(original.id) as ActionObject;
+    originalObj.observed = {
+      consumedInputIds: [],
+      producedArtifactIds: [],
+      status: 'completed',
+      cacheHit: true,
+    };
+    await (p as any).store.putObject(originalObj);
+
+    const replayedRun = await p.createRun(agentId);
+    const replayed = await p.planAction(replayedRun.id, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId: replayedRun.id,
+      effectful: true,
+      declared: { inputs: [] },
+      agentId,
+      replayOfActionId: original.id,
+      replayOfRunId: run.id,
+      properties: {},
+    });
+
+    const replayedObj = await p.findByHash(replayed.id) as ActionObject;
+    replayedObj.observed = {
+      consumedInputIds: [],
+      producedArtifactIds: [],
+      status: 'completed',
+      cacheHit: false,
+    };
+    await (p as any).store.putObject(replayedObj);
+
+    const div = await p.getDivergence(replayedRun.id);
+    expect(div.events.some((e) => e.type === 'effectful_action_re_executed')).toBe(true);
+  });
 });

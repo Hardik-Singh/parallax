@@ -59,6 +59,7 @@ describe('replay and forking', () => {
 
     // But the replay run has the action's artifacts
     expect(replayed.artifactIds.length).toBeGreaterThan(0);
+    expect(replayed.actionIds).toContain(action.id);
   });
 
   it('replay recomputes pure actions when upstream changes', async () => {
@@ -80,9 +81,10 @@ describe('replay and forking', () => {
     const replayed = await p.replayRun(run.id);
     expect(replayed.replayOfRunId).toBe(run.id);
 
-    // The REPLAY_OF relation exists
+    // The REPLAY_OF relation exists and unchanged actions are structurally shared
     const replayRels = await p.getRelations('REPLAY_OF');
     expect(replayRels.length).toBeGreaterThan(0);
+    expect(replayed.actionIds).toContain(action.id);
   });
 
   it('forked run sets parentRunId and branchFromActionId', async () => {

@@ -97,8 +97,9 @@ describe('operational query APIs', () => {
     expect(consumed.length).toBeGreaterThanOrEqual(1);
 
     const run = await p.getRun(runId);
-    if (run.artifactIds.length > 0) {
-      const produced = await p.actions.thatProduced(run.artifactIds[0]);
+    const producedArtifactId = run.artifactIds.find((id) => id !== art.id);
+    if (producedArtifactId) {
+      const produced = await p.actions.thatProduced(producedArtifactId);
       expect(produced.length).toBeGreaterThanOrEqual(1);
     }
   });
@@ -118,6 +119,32 @@ describe('operational query APIs', () => {
     const arts = await p.artifacts.forRun(runId);
     expect(arts.length).toBeGreaterThanOrEqual(1);
     expect(arts[0].kind).toBe('Artifact');
+  });
+
+  it('reusable artifacts are shared across runs by content', async () => {
+    const shared = await p.createArtifact({
+      type: 'input',
+      producedByActionId: 'ext',
+      runId,
+      content: { shared: true },
+      reusable: true,
+      properties: {},
+    });
+
+    const run2 = await p.createRun(agentId);
+    const sharedAgain = await p.createArtifact({
+      type: 'input',
+      producedByActionId: 'other-ext',
+      runId: run2.id,
+      content: { shared: true },
+      reusable: true,
+      properties: {},
+    });
+
+    expect(sharedAgain.id).toBe(shared.id);
+
+    const sharedAcrossRuns = await p.artifacts.sharedAcrossRuns();
+    expect(sharedAcrossRuns.some((artifact) => artifact.id === shared.id)).toBe(true);
   });
 
   it('runs.forAgent returns runs by agent', async () => {

@@ -2,7 +2,7 @@
 
 Ontology-backed dual-graph runtime for AI agents.
 
-Parallax models actions, artifacts, goals, agents, and runs as first-class content-addressed objects. It maintains both **declared dependency structure** and **observed execution structure** — the difference between the two is where bugs, drift, and unexpected behavior live.
+Parallax models actions, artifacts, goals, agents, and runs as first-class content-addressed objects. It maintains both **declared dependency structure** and **observed execution structure**. The difference between those two views is where bugs, drift, and unexpected behavior live.
 
 ## Install
 
@@ -41,7 +41,14 @@ Parallax maintains both as typed relations:
 
 ### Content Addressing
 
-All objects are identified by a BLAKE3 hash of their stable identity fields. Mutable runtime state (timestamps, observed metrics, errors) is excluded from the hash. Same stable content always resolves to the same object — deduplication is automatic.
+All objects are identified by a BLAKE3 hash of their stable identity fields. Mutable runtime state such as timestamps, observed metrics, and errors is excluded from the hash.
+
+Important semantics:
+
+- reusable artifacts deduplicate by content, not by producing run
+- non-reusable artifacts stay run-local
+- runs are unique operational sessions, not deduplicated objects
+- replay prefers structural sharing for unchanged completed actions and artifacts
 
 ## Quick Start
 
@@ -120,6 +127,23 @@ getScopedContext(actionId): Promise<Record<string, unknown>>
 
 Resolves exactly the objects listed in `declared.inputs`. Supports `select` (field filtering), `alias` (namespacing), and throws on key collisions. Never exposes undeclared upstream objects.
 
+For v1, context materialization works like this:
+
+- `Artifact` dependencies expose `artifact.content`
+- all other dependencies expose `object.properties`
+
+If you want Parallax to detect field-level scope violations, you can instrument an action with:
+
+```typescript
+properties: {
+  accessedFields: {
+    [artifactId]: ['fieldA', 'fieldB']
+  }
+}
+```
+
+Parallax will compare those fields against each dependency's `select`.
+
 ### Graph Projections
 
 ```typescript
@@ -153,7 +177,14 @@ replayRun(runId, opts?): Promise<RunObject>    // opts.skipEffectful defaults to
 forkRun(runId, fromActionId): Promise<RunObject>
 ```
 
-Replay creates a new run linked via `replayOfRunId`. Effectful actions are reused by default (their artifacts are structurally shared). Pure actions are re-executed or served from cache.
+Replay creates a new run linked via `replayOfRunId`.
+
+Current replay behavior:
+
+- effectful actions are reused by default
+- unchanged completed actions are structurally shared into the replayed run
+- reusable artifacts are structurally shared across runs
+- pure actions are recomputed only when they cannot be safely reused or are forced with `cachePolicy: 'recompute'`
 
 Forking creates a new run with `parentRunId` and `branchFromActionId`, copying actions up to the branch point.
 
@@ -182,6 +213,8 @@ getRelations(type, fromId?, toId?): Promise<Relation[]>
 ```
 
 Nine relation types: `DEPENDS_ON`, `CAUSED`, `PRODUCED`, `CONSUMED`, `PERFORMED_BY`, `PART_OF`, `TARGETS`, `REPLAY_OF`, `VIOLATES`.
+
+`CAUSED` edges are emitted from a producing action to a consuming action when the consumer declares an input artifact produced by that upstream action.
 
 `DEPENDS_ON` is DAG-validated — cycles are rejected.
 
@@ -226,6 +259,8 @@ src/
   events.ts         — event registry
 ```
 
+For a cleaner semantics-oriented walkthrough, see [docs/SEMANTICS.md](./docs/SEMANTICS.md).
+
 ## Invariants
 
 These are enforced, not best-effort:
@@ -237,6 +272,8 @@ These are enforced, not best-effort:
 - `getScopedContext` exposes only declared inputs
 - Key collisions in scoped context throw
 - Effectful actions are reused on replay by default
+- Reusable artifacts deduplicate by content across runs
+- Replayed runs can structurally share unchanged completed actions
 - Relations must connect existing objects
 
 ## Development

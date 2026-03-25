@@ -1,4 +1,4 @@
-import { hash, canonicalize } from './hash.js';
+import { hash } from './hash.js';
 import { resolveScopedContext } from './context.js';
 import { deriveCacheKey } from './caching.js';
 import { relationId, validateNoCycle, validateEndpoints } from './relations.js';
@@ -46,6 +46,16 @@ function stableActionIdentity(
 function stableArtifactIdentity(
   props: Omit<ArtifactObject, 'id' | 'kind' | 'contentHash' | 'createdAt'>,
 ): Record<string, unknown> {
+  if (props.reusable) {
+    return {
+      kind: 'Artifact',
+      type: props.type,
+      content: props.content,
+      reusable: props.reusable,
+      properties: props.properties,
+    };
+  }
+
   return {
     kind: 'Artifact',
     type: props.type,
@@ -144,6 +154,7 @@ export class Parallax {
     };
 
     await this.store.putRun(run);
+    await this.store.putObject(run);
 
     // Create agent -> run relation
     const agentObj = await this.store.getObject(agentId);
@@ -296,6 +307,8 @@ export class Parallax {
         };
         action.updatedAt = new Date().toISOString();
         await this.store.putObject(action);
+        await this.syncRunArtifacts(action.runId, cached.artifactIds);
+        await this.linkConsumedAndCaused(action);
         this.events.emit('action:completed', action);
         return action;
       }
@@ -329,10 +342,7 @@ export class Parallax {
         }
       }
 
-      // CONSUMED relations for declared inputs
-      for (const dep of action.declared.inputs) {
-        await this.linkInternal('CONSUMED', actionId, dep.objectId);
-      }
+      await this.linkConsumedAndCaused(action);
 
       // Update action with observed state
       action.status = 'completed';
@@ -345,13 +355,7 @@ export class Parallax {
       action.updatedAt = new Date().toISOString();
       await this.store.putObject(action);
 
-      // Update run with artifact ids
-      for (const aid of artifactIds) {
-        if (!run.artifactIds.includes(aid)) {
-          run.artifactIds.push(aid);
-        }
-      }
-      await this.store.putRun(run);
+      await this.syncRunArtifacts(run.id, artifactIds);
 
       // Cache result for pure actions
       if (!action.effectful) {
@@ -391,7 +395,10 @@ export class Parallax {
     const id = hash(stable);
 
     const existing = await this.store.getObject(id);
-    if (existing) return existing as ArtifactObject;
+    if (existing) {
+      await this.attachArtifactToRun(id, props.runId);
+      return existing as ArtifactObject;
+    }
 
     const artifact: ArtifactObject = {
       ...props,
@@ -401,6 +408,7 @@ export class Parallax {
       createdAt: new Date().toISOString(),
     };
     await this.store.putObject(artifact);
+    await this.attachArtifactToRun(artifact.id, props.runId);
     return artifact;
   }
 
@@ -508,6 +516,9 @@ export class Parallax {
   async getDivergence(runId: string): Promise<DivergenceRecord> {
     const run = await this.getRun(runId);
     const events: DivergenceEvent[] = [];
+    const goal = run.goalId
+      ? ((await this.store.getObject(run.goalId)) as GoalObject | undefined)
+      : undefined;
 
     for (const actionId of run.actionIds) {
       const obj = await this.store.getObject(actionId);
@@ -556,23 +567,74 @@ export class Parallax {
           description: `Action ${action.id} attributed to agent ${action.agentId} but run belongs to agent ${run.agentId}`,
         });
       }
+
+      // Check context scope violations using optional accessedFields instrumentation
+      const accessedFields = action.properties.accessedFields;
+      if (accessedFields && typeof accessedFields === 'object') {
+        const accessedByObject = accessedFields as Record<string, unknown>;
+        for (const dep of action.declared.inputs) {
+          if (!dep.select || dep.select.length === 0) continue;
+          const rawFields = accessedByObject[dep.objectId];
+          if (!Array.isArray(rawFields)) continue;
+          const allowed = new Set(dep.select);
+          const invalid = rawFields.filter(
+            (field): field is string => typeof field === 'string' && !allowed.has(field),
+          );
+          if (invalid.length > 0) {
+            events.push({
+              type: 'context_scope_violation',
+              actionId: action.id,
+              objectId: dep.objectId,
+              description: `Action ${action.id} accessed undeclared fields [${invalid.join(', ')}] from ${dep.objectId}`,
+            });
+          }
+        }
+      }
+
+      if (
+        action.effectful &&
+        action.replayOfActionId &&
+        action.observed?.status === 'completed' &&
+        action.observed.cacheHit !== true
+      ) {
+        events.push({
+          type: 'effectful_action_re_executed',
+          actionId: action.id,
+          description: `Effectful replayed action ${action.id} was executed again instead of reusing prior artifacts`,
+        });
+      }
+
+      if (
+        goal &&
+        (goal.status === 'drifted' ||
+          (action.actionKind === 'GoalUpdate' &&
+            action.properties.goalStatus === 'drifted'))
+      ) {
+        events.push({
+          type: 'goal_drift',
+          actionId: action.id,
+          objectId: goal.id,
+          description: `Action ${action.id} is associated with drifted goal ${goal.id}`,
+        });
+      }
     }
 
     // Check for unexpected causal edges — CAUSED relations not backed by DEPENDS_ON
     const causedRels = await this.store.getRelations('CAUSED');
-    const dependsOnRels = await this.store.getRelations('DEPENDS_ON');
-    const dependsOnPairs = new Set(dependsOnRels.map((r) => `${r.from}:${r.to}`));
     const runActionIds = new Set(run.actionIds);
 
     for (const caused of causedRels) {
-      if (!runActionIds.has(caused.from)) continue;
-      // A causal edge without a corresponding dependency declaration
-      if (!dependsOnPairs.has(`${caused.from}:${caused.to}`)) {
+      if (!runActionIds.has(caused.from) || !runActionIds.has(caused.to)) continue;
+      const targetObj = await this.store.getObject(caused.to);
+      if (!targetObj || targetObj.kind !== 'Action') continue;
+      const targetAction = targetObj as ActionObject;
+      const declaredSources = await this.getDeclaredProducerActionIds(targetAction);
+      if (!declaredSources.has(caused.from)) {
         events.push({
           type: 'unexpected_causal_edge',
-          actionId: caused.from,
-          objectId: caused.to,
-          description: `Causal edge ${caused.from} -> ${caused.to} has no corresponding DEPENDS_ON declaration`,
+          actionId: caused.to,
+          objectId: caused.from,
+          description: `Causal edge ${caused.from} -> ${caused.to} has no corresponding declared dependency path`,
         });
       }
     }
@@ -718,49 +780,26 @@ export class Parallax {
       createdAt: new Date().toISOString(),
     };
     await this.store.putRun(newRun);
+    await this.store.putObject(newRun);
+    await this.linkInternal('REPLAY_OF', newRun.id, originalRun.id);
 
     // Replay each action
     for (const actionId of originalRun.actionIds) {
       const originalAction = (await this.store.getObject(actionId)) as ActionObject;
       if (!originalAction) continue;
 
-      if (originalAction.effectful && skipEffectful) {
-        // Reuse effectful action's artifacts — structural sharing
-        const replayAction = await this.planAction(newRun.id, {
-          type: originalAction.type,
-          actionKind: originalAction.actionKind,
-          runId: newRun.id,
-          effectful: originalAction.effectful,
-          declared: originalAction.declared,
-          agentId: originalAction.agentId,
-          properties: originalAction.properties,
-          cachePolicy: originalAction.cachePolicy,
-          replayOfActionId: originalAction.id,
-          replayOfRunId: runId,
-        });
+      const canStructurallyShare =
+        !!originalAction.observed &&
+        (originalAction.effectful
+          ? skipEffectful
+          : originalAction.cachePolicy !== 'recompute');
 
-        // Copy observed state from original
+      if (canStructurallyShare) {
+        await this.attachActionToRun(originalAction.id, newRun.id);
         if (originalAction.observed) {
-          replayAction.status = 'replayed';
-          replayAction.observed = {
-            ...originalAction.observed,
-            status: 'completed',
-            cacheHit: true,
-          };
-          replayAction.updatedAt = new Date().toISOString();
-          await this.store.putObject(replayAction);
-
-          // Share artifacts
-          for (const artId of originalAction.observed.producedArtifactIds) {
-            if (!newRun.artifactIds.includes(artId)) {
-              newRun.artifactIds.push(artId);
-            }
-          }
+          await this.syncRunArtifacts(newRun.id, originalAction.observed.producedArtifactIds);
         }
-
-        await this.linkInternal('REPLAY_OF', replayAction.id, originalAction.id);
       } else {
-        // Re-execute pure actions
         const replayAction = await this.planAction(newRun.id, {
           type: originalAction.type,
           actionKind: originalAction.actionKind,
@@ -824,25 +863,19 @@ export class Parallax {
       createdAt: new Date().toISOString(),
     };
     await this.store.putRun(newRun);
+    await this.store.putObject(newRun);
 
     // Copy actions up to and including the branch point (structural sharing)
     const actionsToCopy = originalRun.actionIds.slice(0, branchIndex + 1);
     for (const actionId of actionsToCopy) {
-      newRun.actionIds.push(actionId);
-
-      // Share artifacts from these actions
+      await this.attachActionToRun(actionId, newRun.id);
       const actionObj = (await this.store.getObject(actionId)) as ActionObject;
       if (actionObj?.observed?.producedArtifactIds) {
-        for (const artId of actionObj.observed.producedArtifactIds) {
-          if (!newRun.artifactIds.includes(artId)) {
-            newRun.artifactIds.push(artId);
-          }
-        }
+        await this.syncRunArtifacts(newRun.id, actionObj.observed.producedArtifactIds);
       }
     }
 
-    await this.store.putRun(newRun);
-    return newRun;
+    return this.getRun(newRun.id);
   }
 
   // =========================================================================
@@ -1047,6 +1080,58 @@ export class Parallax {
       }
     }
     return hashes;
+  }
+
+  private async getDeclaredProducerActionIds(action: ActionObject): Promise<Set<string>> {
+    const producerIds = new Set<string>();
+    for (const dep of action.declared.inputs) {
+      const obj = await this.store.getObject(dep.objectId);
+      if (obj?.kind === 'Artifact') {
+        const artifact = obj as ArtifactObject;
+        if (artifact.producedByActionId) {
+          producerIds.add(artifact.producedByActionId);
+        }
+      }
+    }
+    return producerIds;
+  }
+
+  private async linkConsumedAndCaused(action: ActionObject): Promise<void> {
+    for (const dep of action.declared.inputs) {
+      await this.linkInternal('CONSUMED', action.id, dep.objectId);
+      const obj = await this.store.getObject(dep.objectId);
+      if (obj?.kind === 'Artifact') {
+        const artifact = obj as ArtifactObject;
+        if (artifact.producedByActionId && artifact.producedByActionId !== action.id) {
+          await this.linkInternal('CAUSED', artifact.producedByActionId, action.id);
+        }
+      }
+    }
+  }
+
+  private async attachActionToRun(actionId: string, runId: string): Promise<void> {
+    const run = await this.getRun(runId);
+    if (!run.actionIds.includes(actionId)) {
+      run.actionIds.push(actionId);
+      await this.store.putRun(run);
+    }
+    await this.linkInternal('PART_OF', actionId, runId);
+  }
+
+  private async attachArtifactToRun(artifactId: string, runId: string): Promise<void> {
+    const run = await this.store.getRun(runId);
+    if (!run) return;
+    if (!run.artifactIds.includes(artifactId)) {
+      run.artifactIds.push(artifactId);
+      await this.store.putRun(run);
+    }
+    await this.linkInternal('PART_OF', artifactId, runId);
+  }
+
+  private async syncRunArtifacts(runId: string, artifactIds: string[]): Promise<void> {
+    for (const artifactId of artifactIds) {
+      await this.attachArtifactToRun(artifactId, runId);
+    }
   }
 
   private async createDivergenceRecord(
