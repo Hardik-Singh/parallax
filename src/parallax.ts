@@ -324,14 +324,25 @@ export class Parallax {
     }
 
     const action = await this.createModelAction(runId, opts);
-    const executed = await this.executeAction(action.id);
+    const executed =
+      action.observed?.status === 'completed'
+        ? action
+        : await this.executeAction(action.id);
+
+    return this.toModelActionResult(executed);
+  }
+
+  private async toModelActionResult(action: ActionObject): Promise<ModelActionResult> {
+    if (!action.observed || action.observed.status !== 'completed') {
+      throw new Error(`Model action ${action.id} has not completed successfully`);
+    }
 
     // Read produced artifacts for this action
-    const responseArtifact = await this.findProducedArtifact(executed, 'llm-response');
-    const toolRequestArtifacts = await this.findProducedArtifacts(executed, 'tool-request');
+    const responseArtifact = await this.findProducedArtifact(action, 'llm-response');
+    const toolRequestArtifacts = await this.findProducedArtifacts(action, 'tool-request');
 
     return {
-      action: executed,
+      action,
       response: (responseArtifact?.content.text as string) ?? '',
       toolCalls:
         toolRequestArtifacts.length > 0
@@ -340,7 +351,7 @@ export class Parallax {
               arguments: a.content.arguments as Record<string, unknown>,
             }))
           : undefined,
-      usage: executed.observed?.metrics?.tokenUsage,
+      usage: action.observed.metrics?.tokenUsage,
     };
   }
 

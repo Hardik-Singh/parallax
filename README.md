@@ -54,38 +54,44 @@ Important semantics:
 
 ```typescript
 import { Parallax } from '@invariance/parallax';
+import type { LLMAdapter } from '@invariance/parallax';
+
+const adapter: LLMAdapter = {
+  async generate({ model, prompt }) {
+    const response = await yourProvider.complete({ model, prompt });
+    return {
+      output: response.text,
+      usage: { input: response.inputTokens, output: response.outputTokens },
+    };
+  },
+};
 
 const p = new Parallax();
+p.registerLLM(adapter);
 
-// Create an agent and a run
-const agent = await p.createAgent({ type: 'Agent', properties: { name: 'my-agent' } });
+const agent = await p.createAgent({ type: 'response-agent', properties: { name: 'my-agent' } });
 const run = await p.createRun(agent.id, { goalDescription: 'Summarize document' });
 
-// Plan an action with declared dependencies
-const action = await p.planAction(run.id, {
-  type: 'summarize',
-  actionKind: 'ModelInference',
+const doc = await p.createArtifact({
+  type: 'prompt-input',
+  producedByActionId: agent.id,
   runId: run.id,
-  effectful: false,
-  declared: {
-    inputs: [{ objectId: someArtifact.id, select: ['text'] }],
-  },
-  agentId: agent.id,
-  properties: { model: 'claude-sonnet-4-6' },
+  content: { text: 'Long source document...' },
+  reusable: true,
+  properties: {},
 });
 
-// Register an executor and run the action
-p.registerExecutor('ModelInference', myExecutor);
-const executed = await p.executeAction(action.id);
+const result = await p.runModelAction(run.id, {
+  model: 'claude-sonnet-4-20250514',
+  prompt: `Summarize this:\n\n${doc.content.text}`,
+  inputs: [{ objectId: doc.id, select: ['text'] }],
+  agentId: agent.id,
+});
 
-// Check for divergence
+console.log(result.response);
+
 const report = await p.getDivergence(run.id);
-
-// Replay the run (effectful actions reuse cached outputs)
 const replayed = await p.replayRun(run.id);
-
-// Fork from a specific action
-const forked = await p.forkRun(run.id, action.id);
 ```
 
 ## API

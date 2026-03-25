@@ -171,4 +171,24 @@ describe('ModelInference', () => {
       }),
     ).rejects.toThrow('No LLM adapter registered');
   });
+
+  it('runModelAction is idempotent for the same completed effectful action', async () => {
+    const first = await p.runModelAction(runId, {
+      model: 'test-model',
+      prompt: 'Repeatable prompt',
+      agentId,
+    });
+    const second = await p.runModelAction(runId, {
+      model: 'test-model',
+      prompt: 'Repeatable prompt',
+      agentId,
+    });
+
+    expect(generateCallCount).toBe(1);
+    expect(second.action.id).toBe(first.action.id);
+    expect(second.response).toBe(first.response);
+    expect(second.action.observed?.producedArtifactIds).toEqual(
+      first.action.observed?.producedArtifactIds,
+    );
+  });
 });

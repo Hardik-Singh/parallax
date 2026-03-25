@@ -58,6 +58,8 @@ console.log(result.toolCalls);  // undefined or [{ name, arguments }]
 2. Executes it
 3. Returns the action, response text, tool calls, and usage in a flat result
 
+If the same completed effectful model action is requested again in the same run with identical stable inputs, `runModelAction` returns the existing completed action instead of calling the adapter a second time.
+
 ## Artifact Conventions
 
 The `ModelInferenceExecutor` automatically produces these artifacts:
