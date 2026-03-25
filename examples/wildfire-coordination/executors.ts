@@ -1,4 +1,4 @@
-import type { ActionExecutor } from '../../src/types.js';
+import type { ActionExecutor } from '../../src/index.ts';
 
 // ---------------------------------------------------------------------------
 // DataFetch — effectful executor for external data retrieval

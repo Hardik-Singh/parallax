@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { Parallax } from '../../src/parallax.js';
-import type { ActionObject } from '../../src/types.js';
+import { Parallax } from '../../src/index.ts';
+import type { ActionObject } from '../../src/index.ts';
 import { createDataFetchExecutor, createAnalysisExecutor } from './executors.js';
 import { exportScenario } from './export.js';
 

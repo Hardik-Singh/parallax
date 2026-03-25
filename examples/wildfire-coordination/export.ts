@@ -1,4 +1,4 @@
-import type { Parallax } from '../../src/parallax.js';
+import type { Parallax } from '../../src/index.ts';
 import type {
   BaseObject,
   Relation,
@@ -6,7 +6,7 @@ import type {
   RunObject,
   DivergenceRecord,
   GraphProjection,
-} from '../../src/types.js';
+} from '../../src/index.ts';
 
 // ---------------------------------------------------------------------------
 // Export types
