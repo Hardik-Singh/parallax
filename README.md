@@ -54,38 +54,44 @@ Important semantics:
 
 ```typescript
 import { Parallax } from '@invariance/parallax';
+import type { LLMAdapter } from '@invariance/parallax';
+
+const adapter: LLMAdapter = {
+  async generate({ model, prompt }) {
+    const response = await yourProvider.complete({ model, prompt });
+    return {
+      output: response.text,
+      usage: { input: response.inputTokens, output: response.outputTokens },
+    };
+  },
+};
 
 const p = new Parallax();
+p.registerLLM(adapter);
 
-// Create an agent and a run
-const agent = await p.createAgent({ type: 'Agent', properties: { name: 'my-agent' } });
+const agent = await p.createAgent({ type: 'response-agent', properties: { name: 'my-agent' } });
 const run = await p.createRun(agent.id, { goalDescription: 'Summarize document' });
 
-// Plan an action with declared dependencies
-const action = await p.planAction(run.id, {
-  type: 'summarize',
-  actionKind: 'ModelInference',
+const doc = await p.createArtifact({
+  type: 'prompt-input',
+  producedByActionId: agent.id,
   runId: run.id,
-  effectful: false,
-  declared: {
-    inputs: [{ objectId: someArtifact.id, select: ['text'] }],
-  },
-  agentId: agent.id,
-  properties: { model: 'claude-sonnet-4-6' },
+  content: { text: 'Long source document...' },
+  reusable: true,
+  properties: {},
 });
 
-// Register an executor and run the action
-p.registerExecutor('ModelInference', myExecutor);
-const executed = await p.executeAction(action.id);
+const result = await p.runModelAction(run.id, {
+  model: 'claude-sonnet-4-20250514',
+  prompt: `Summarize this:\n\n${doc.content.text}`,
+  inputs: [{ objectId: doc.id, select: ['text'] }],
+  agentId: agent.id,
+});
 
-// Check for divergence
+console.log(result.response);
+
 const report = await p.getDivergence(run.id);
-
-// Replay the run (effectful actions reuse cached outputs)
 const replayed = await p.replayRun(run.id);
-
-// Fork from a specific action
-const forked = await p.forkRun(run.id, action.id);
 ```
 
 ## API
@@ -115,9 +121,46 @@ interface ActionExecutor {
   execute(action: ActionObject, context: Record<string, unknown>): Promise<{
     outputs: Record<string, unknown>;
     producedArtifacts?: Omit<ArtifactObject, 'id' | 'kind' | 'producedByActionId' | 'runId' | 'contentHash' | 'createdAt'>[];
+    metrics?: ExecutionMetrics;
   }>;
 }
 ```
+
+If an executor returns `metrics`, they are persisted in `action.observed.metrics`.
+
+### LLM Integration
+
+```typescript
+registerLLM(adapter): void
+createModelAction(runId, opts): Promise<ActionObject>
+runModelAction(runId, opts): Promise<ModelActionResult>
+```
+
+Register an `LLMAdapter` to enable `ModelInference` actions. `runModelAction` plans, executes, and returns the response in one call:
+
+```typescript
+p.registerLLM({
+  generate: async ({ model, prompt, system }) => {
+    const res = await yourProvider.complete({ model, prompt, system });
+    return { output: res.text, usage: { input: res.inputTokens, output: res.outputTokens } };
+  },
+});
+
+const result = await p.runModelAction(run.id, {
+  model: 'claude-sonnet-4-20250514',
+  prompt: 'Summarize this diff',
+  inputs: [{ objectId: diffArtifact.id }],
+  agentId: agent.id,
+});
+
+console.log(result.response);   // LLM output
+console.log(result.usage);      // { input, output }
+console.log(result.toolCalls);  // tool calls if any
+```
+
+Model actions are `effectful: true` by default — replay reuses them without re-calling the LLM. The executor produces `llm-response` and `tool-request` artifacts automatically.
+
+See [docs/LLM.md](./docs/LLM.md) for full examples including a multi-step coding agent.
 
 ### Scoped Context
 
@@ -250,6 +293,8 @@ src/
   index.ts          — main exports
   parallax.ts       — Parallax class (core runtime)
   types.ts          — all type definitions
+  llm.ts            — LLM adapter types
+  model.ts          — ModelInferenceExecutor
   hash.ts           — canonical BLAKE3 hashing
   store.ts          — ParallaxStore interface
   store/memory.ts   — InMemoryParallaxStore
@@ -281,7 +326,7 @@ These are enforced, not best-effort:
 ```bash
 npm install
 npm run typecheck   # strict TypeScript
-npm test            # 40 tests across 11 suites
+npm test            # 50 tests across 12 suites
 npm run build       # ESM output with declaration files
 ```
 
