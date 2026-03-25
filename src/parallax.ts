@@ -4,7 +4,9 @@ import { deriveCacheKey } from './caching.js';
 import { relationId, validateNoCycle, validateEndpoints } from './relations.js';
 import { EventRegistry, type EventHandler } from './events.js';
 import { InMemoryParallaxStore } from './store/memory.js';
+import { ModelInferenceExecutor } from './model.js';
 import type { ParallaxStore } from './store.js';
+import type { LLMAdapter, CreateModelActionOpts, ModelActionResult } from './llm.js';
 import type {
   ActionExecutor,
   ActionObject,
@@ -76,6 +78,7 @@ export class Parallax {
   private executors = new Map<string, ActionExecutor>();
   private events = new EventRegistry();
   private cache = new Map<string, { outputs: Record<string, unknown>; artifactIds: string[] }>();
+  private llmAdapter?: LLMAdapter;
 
   constructor(store?: ParallaxStore) {
     this.store = store ?? new InMemoryParallaxStore();
@@ -281,6 +284,66 @@ export class Parallax {
     this.executors.set(actionKind, executor);
   }
 
+  registerLLM(adapter: LLMAdapter): void {
+    this.llmAdapter = adapter;
+    this.registerExecutor('ModelInference', new ModelInferenceExecutor(adapter));
+  }
+
+  async createModelAction(
+    runId: string,
+    opts: CreateModelActionOpts,
+  ): Promise<ActionObject> {
+    return this.planAction(runId, {
+      type: opts.model,
+      actionKind: 'ModelInference',
+      runId,
+      effectful: true,
+      declared: {
+        inputs: opts.inputs ?? [],
+        intendedEffect: `LLM inference with ${opts.model}`,
+      },
+      agentId: opts.agentId,
+      properties: {
+        model: opts.model,
+        system: opts.system,
+        prompt: opts.prompt,
+        tools: opts.tools,
+        responseFormat: opts.responseFormat,
+        ...(opts.properties ?? {}),
+      },
+      cachePolicy: opts.cachePolicy,
+    });
+  }
+
+  async runModelAction(
+    runId: string,
+    opts: CreateModelActionOpts,
+  ): Promise<ModelActionResult> {
+    if (!this.llmAdapter) {
+      throw new Error('No LLM adapter registered. Call registerLLM() first.');
+    }
+
+    const action = await this.createModelAction(runId, opts);
+    const executed = await this.executeAction(action.id);
+
+    // Read produced artifacts for this action
+    const responseArtifact = await this.findProducedArtifact(executed, 'llm-response');
+    const toolRequestArtifacts = await this.findProducedArtifacts(executed, 'tool-request');
+
+    return {
+      action: executed,
+      response: (responseArtifact?.content.text as string) ?? '',
+      toolCalls:
+        toolRequestArtifacts.length > 0
+          ? toolRequestArtifacts.map((a) => ({
+              name: a.content.name as string,
+              arguments: a.content.arguments as Record<string, unknown>,
+            }))
+          : undefined,
+      usage: executed.observed?.metrics?.tokenUsage,
+    };
+  }
+
   async executeAction(actionId: string): Promise<ActionObject> {
     const obj = await this.store.getObject(actionId);
     if (!obj || obj.kind !== 'Action') throw new Error(`Action not found: ${actionId}`);
@@ -351,6 +414,7 @@ export class Parallax {
         producedArtifactIds: artifactIds,
         status: 'completed',
         cacheHit: false,
+        metrics: result.metrics,
       };
       action.updatedAt = new Date().toISOString();
       await this.store.putObject(action);
@@ -1019,6 +1083,35 @@ export class Parallax {
   // =========================================================================
   // Internal helpers
   // =========================================================================
+
+  private async findProducedArtifact(
+    action: ActionObject,
+    artifactType: string,
+  ): Promise<ArtifactObject | undefined> {
+    const ids = action.observed?.producedArtifactIds ?? [];
+    for (const id of ids) {
+      const obj = await this.store.getObject(id);
+      if (obj?.kind === 'Artifact' && (obj as ArtifactObject).type === artifactType) {
+        return obj as ArtifactObject;
+      }
+    }
+    return undefined;
+  }
+
+  private async findProducedArtifacts(
+    action: ActionObject,
+    artifactType: string,
+  ): Promise<ArtifactObject[]> {
+    const ids = action.observed?.producedArtifactIds ?? [];
+    const results: ArtifactObject[] = [];
+    for (const id of ids) {
+      const obj = await this.store.getObject(id);
+      if (obj?.kind === 'Artifact' && (obj as ArtifactObject).type === artifactType) {
+        results.push(obj as ArtifactObject);
+      }
+    }
+    return results;
+  }
 
   /**
    * Internal link — skips endpoint validation for objects we just created.

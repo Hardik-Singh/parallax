@@ -1,6 +1,7 @@
 export { Parallax } from './parallax.js';
 export { hash, canonicalize } from './hash.js';
 export { InMemoryParallaxStore } from './store/memory.js';
+export { ModelInferenceExecutor } from './model.js';
 
 export type {
   ObjectKind,
@@ -23,5 +24,15 @@ export type {
   GraphProjection,
   ParallaxEventType,
 } from './types.js';
+
+export type {
+  LLMAdapter,
+  LLMGenerateInput,
+  LLMGenerateOutput,
+  LLMToolDefinition,
+  LLMToolCall,
+  CreateModelActionOpts,
+  ModelActionResult,
+} from './llm.js';
 
 export type { ParallaxStore } from './store.js';

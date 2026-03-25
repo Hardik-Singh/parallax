@@ -216,6 +216,7 @@ export interface ActionExecutor {
       ArtifactObject,
       'id' | 'kind' | 'producedByActionId' | 'runId' | 'contentHash' | 'createdAt'
     >[];
+    metrics?: ExecutionMetrics;
   }>;
 }
 

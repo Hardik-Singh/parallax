@@ -115,9 +115,46 @@ interface ActionExecutor {
   execute(action: ActionObject, context: Record<string, unknown>): Promise<{
     outputs: Record<string, unknown>;
     producedArtifacts?: Omit<ArtifactObject, 'id' | 'kind' | 'producedByActionId' | 'runId' | 'contentHash' | 'createdAt'>[];
+    metrics?: ExecutionMetrics;
   }>;
 }
 ```
+
+If an executor returns `metrics`, they are persisted in `action.observed.metrics`.
+
+### LLM Integration
+
+```typescript
+registerLLM(adapter): void
+createModelAction(runId, opts): Promise<ActionObject>
+runModelAction(runId, opts): Promise<ModelActionResult>
+```
+
+Register an `LLMAdapter` to enable `ModelInference` actions. `runModelAction` plans, executes, and returns the response in one call:
+
+```typescript
+p.registerLLM({
+  generate: async ({ model, prompt, system }) => {
+    const res = await yourProvider.complete({ model, prompt, system });
+    return { output: res.text, usage: { input: res.inputTokens, output: res.outputTokens } };
+  },
+});
+
+const result = await p.runModelAction(run.id, {
+  model: 'claude-sonnet-4-20250514',
+  prompt: 'Summarize this diff',
+  inputs: [{ objectId: diffArtifact.id }],
+  agentId: agent.id,
+});
+
+console.log(result.response);   // LLM output
+console.log(result.usage);      // { input, output }
+console.log(result.toolCalls);  // tool calls if any
+```
+
+Model actions are `effectful: true` by default — replay reuses them without re-calling the LLM. The executor produces `llm-response` and `tool-request` artifacts automatically.
+
+See [docs/LLM.md](./docs/LLM.md) for full examples including a multi-step coding agent.
 
 ### Scoped Context
 
@@ -250,6 +287,8 @@ src/
   index.ts          — main exports
   parallax.ts       — Parallax class (core runtime)
   types.ts          — all type definitions
+  llm.ts            — LLM adapter types
+  model.ts          — ModelInferenceExecutor
   hash.ts           — canonical BLAKE3 hashing
   store.ts          — ParallaxStore interface
   store/memory.ts   — InMemoryParallaxStore
@@ -281,7 +320,7 @@ These are enforced, not best-effort:
 ```bash
 npm install
 npm run typecheck   # strict TypeScript
-npm test            # 40 tests across 11 suites
+npm test            # 50 tests across 12 suites
 npm run build       # ESM output with declaration files
 ```
 
