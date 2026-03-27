@@ -162,6 +162,45 @@ Model actions are `effectful: true` by default — replay reuses them without re
 
 See [docs/LLM.md](./docs/LLM.md) for full examples including a multi-step coding agent.
 
+### Tool Execution
+
+```typescript
+registerTool(tool): void
+getTool(name): ParallaxTool | undefined
+createToolAction(runId, opts): Promise<ActionObject>
+runToolAction(runId, opts): Promise<ToolActionResult>
+```
+
+Register `ParallaxTool` implementations to enable `ToolCall` actions. `runToolAction` plans, executes, and returns the output in one call:
+
+```typescript
+import type { ParallaxTool } from '@invariance/parallax';
+
+const fetchWeather: ParallaxTool = {
+  name: 'fetch_weather',
+  effectful: true,
+  async execute(input) {
+    return { tempC: 22, conditions: 'sunny', location: input.location };
+  },
+};
+
+p.registerTool(fetchWeather);
+
+const result = await p.runToolAction(run.id, {
+  type: 'fetch-weather',
+  toolName: 'fetch_weather',
+  toolInput: { location: 'Seattle' },
+  declared: { inputs: [] },
+  agentId: agent.id,
+});
+
+console.log(result.output);  // { tempC: 22, conditions: 'sunny', location: 'Seattle' }
+```
+
+Tools default to `effectful: true` — replay reuses them without re-calling the tool. Set `effectful: false` for pure tools that should use caching. The executor produces `tool-request` and `tool-result` artifacts automatically.
+
+See [docs/TOOLS.md](./docs/TOOLS.md) for full examples including multi-step pipelines with replay.
+
 ### Scoped Context
 
 ```typescript
@@ -295,6 +334,7 @@ src/
   types.ts          — all type definitions
   llm.ts            — LLM adapter types
   model.ts          — ModelInferenceExecutor
+  tool.ts           — ParallaxTool types & ToolExecutor
   hash.ts           — canonical BLAKE3 hashing
   store.ts          — ParallaxStore interface
   store/memory.ts   — InMemoryParallaxStore
@@ -326,7 +366,7 @@ These are enforced, not best-effort:
 ```bash
 npm install
 npm run typecheck   # strict TypeScript
-npm test            # 50 tests across 12 suites
+npm test            # 62 tests across 13 suites
 npm run build       # ESM output with declaration files
 ```
 

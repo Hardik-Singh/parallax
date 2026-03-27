@@ -2,6 +2,7 @@ export { Parallax } from './parallax.js';
 export { hash, canonicalize } from './hash.js';
 export { InMemoryParallaxStore } from './store/memory.js';
 export { ModelInferenceExecutor } from './model.js';
+export { ToolExecutor } from './tool.js';
 
 export type {
   ObjectKind,
@@ -36,3 +37,9 @@ export type {
 } from './llm.js';
 
 export type { ParallaxStore } from './store.js';
+
+export type {
+  ParallaxTool,
+  CreateToolActionOpts,
+  ToolActionResult,
+} from './tool.js';

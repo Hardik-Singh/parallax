@@ -5,8 +5,10 @@ import { relationId, validateNoCycle, validateEndpoints } from './relations.js';
 import { EventRegistry, type EventHandler } from './events.js';
 import { InMemoryParallaxStore } from './store/memory.js';
 import { ModelInferenceExecutor } from './model.js';
+import { ToolExecutor } from './tool.js';
 import type { ParallaxStore } from './store.js';
 import type { LLMAdapter, CreateModelActionOpts, ModelActionResult } from './llm.js';
+import type { ParallaxTool, CreateToolActionOpts, ToolActionResult } from './tool.js';
 import type {
   ActionExecutor,
   ActionObject,
@@ -79,6 +81,8 @@ export class Parallax {
   private events = new EventRegistry();
   private cache = new Map<string, { outputs: Record<string, unknown>; artifactIds: string[] }>();
   private llmAdapter?: LLMAdapter;
+  private toolRegistry = new Map<string, ParallaxTool>();
+  private toolExecutor?: ToolExecutor;
 
   constructor(store?: ParallaxStore) {
     this.store = store ?? new InMemoryParallaxStore();
@@ -352,6 +356,73 @@ export class Parallax {
             }))
           : undefined,
       usage: action.observed.metrics?.tokenUsage,
+    };
+  }
+
+  // =========================================================================
+  // Tool execution
+  // =========================================================================
+
+  registerTool(tool: ParallaxTool): void {
+    this.toolRegistry.set(tool.name, tool);
+    if (!this.toolExecutor) {
+      this.toolExecutor = new ToolExecutor(this.toolRegistry);
+      this.registerExecutor('ToolCall', this.toolExecutor);
+    }
+  }
+
+  getTool(name: string): ParallaxTool | undefined {
+    return this.toolRegistry.get(name);
+  }
+
+  async createToolAction(
+    runId: string,
+    opts: CreateToolActionOpts,
+  ): Promise<ActionObject> {
+    const tool = this.toolRegistry.get(opts.toolName);
+    const effectful = tool?.effectful ?? true;
+
+    return this.planAction(runId, {
+      type: opts.type,
+      actionKind: 'ToolCall',
+      runId,
+      effectful,
+      declared: opts.declared,
+      agentId: opts.agentId,
+      properties: {
+        toolName: opts.toolName,
+        toolInput: opts.toolInput,
+        ...(opts.properties ?? {}),
+      },
+      cachePolicy: opts.cachePolicy,
+    });
+  }
+
+  async runToolAction(
+    runId: string,
+    opts: CreateToolActionOpts,
+  ): Promise<ToolActionResult> {
+    if (this.toolRegistry.size === 0) {
+      throw new Error('No tools registered. Call registerTool() first.');
+    }
+
+    const action = await this.createToolAction(runId, opts);
+    const executed =
+      action.observed?.status === 'completed'
+        ? action
+        : await this.executeAction(action.id);
+
+    return this.toToolActionResult(executed);
+  }
+
+  private async toToolActionResult(action: ActionObject): Promise<ToolActionResult> {
+    if (!action.observed || action.observed.status !== 'completed') {
+      throw new Error(`Tool action ${action.id} has not completed successfully`);
+    }
+    const resultArtifact = await this.findProducedArtifact(action, 'tool-result');
+    return {
+      action,
+      output: (resultArtifact?.content.output as Record<string, unknown>) ?? {},
     };
   }
 
