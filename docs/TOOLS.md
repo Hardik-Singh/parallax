@@ -137,6 +137,8 @@ const result = await p.runToolAction(run.id, {
 
 The tool's `execute` function receives a merged context of `toolInput` and the materialized declared inputs. For artifacts, the content is materialized; for other objects, the properties are materialized.
 
+The recorded `tool-request` artifact stores that final merged input, so provenance reflects what the tool actually received at execution time.
+
 ## Divergence Detection
 
 Tool actions participate in the same divergence detection as all other actions:

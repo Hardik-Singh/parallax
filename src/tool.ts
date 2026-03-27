@@ -48,7 +48,8 @@ export class ToolExecutor implements ActionExecutor {
 
     const startedAt = new Date();
     const toolInput = (action.properties.toolInput as Record<string, unknown>) ?? {};
-    const output = await tool.execute({ ...toolInput, ...context });
+    const finalInput = { ...context, ...toolInput };
+    const output = await tool.execute(finalInput);
     const completedAt = new Date();
     const durationMs = completedAt.getTime() - startedAt.getTime();
 
@@ -60,7 +61,7 @@ export class ToolExecutor implements ActionExecutor {
     }> = [
       {
         type: 'tool-request',
-        content: { toolName, input: toolInput },
+        content: { toolName, input: finalInput },
         reusable: false,
         properties: {},
       },

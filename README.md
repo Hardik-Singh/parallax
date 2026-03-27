@@ -199,6 +199,8 @@ console.log(result.output);  // { tempC: 22, conditions: 'sunny', location: 'Sea
 
 Tools default to `effectful: true` — replay reuses them without re-calling the tool. Set `effectful: false` for pure tools that should use caching. The executor produces `tool-request` and `tool-result` artifacts automatically.
 
+`tool-request` captures the final merged input the tool received after combining `toolInput` with scoped declared context.
+
 See [docs/TOOLS.md](./docs/TOOLS.md) for full examples including multi-step pipelines with replay.
 
 ### Scoped Context

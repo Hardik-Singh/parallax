@@ -233,6 +233,14 @@ describe('ToolExecution', () => {
     // The tool receives the artifact content as context
     expect(result.output.summary).toContain('Miami');
     expect(result.output.summary).toContain('humid');
+
+    const artifacts = await p.artifacts.forRun(runId);
+    const request = artifacts.find((a) => a.type === 'tool-request');
+    expect(request?.content.input).toMatchObject({
+      location: 'Miami',
+      tempC: 30,
+      conditions: 'humid',
+    });
   });
 
   it('undeclared input consumption surfaces in divergence reporting', async () => {
