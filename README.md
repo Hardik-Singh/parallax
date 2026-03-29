@@ -203,6 +203,45 @@ Tools default to `effectful: true` — replay reuses them without re-calling the
 
 See [docs/TOOLS.md](./docs/TOOLS.md) for full examples including multi-step pipelines with replay.
 
+### Agent Loops
+
+```typescript
+runAgentLoop(parallax, runId, opts): Promise<AgentLoopResult>
+```
+
+Orchestrate repeated think/act/observe cycles with a driver callback. The loop loads current run state each iteration, calls the driver, and executes the returned decision via `runModelAction` or `runToolAction`:
+
+```typescript
+import { Parallax, runAgentLoop } from '@invariance/parallax';
+import type { AgentLoopDriver } from '@invariance/parallax';
+
+const driver: AgentLoopDriver = async ({ artifacts, iteration }) => {
+  if (iteration === 0) {
+    return {
+      type: 'tool',
+      reason: 'fetch data',
+      tool: { type: 'fetch-weather', toolName: 'fetch_weather', toolInput: { location: 'Seattle' }, declared: { inputs: [] } },
+    };
+  }
+  if (iteration === 1) {
+    return {
+      type: 'model',
+      reason: 'analyze',
+      model: { model: 'claude-sonnet-4-20250514', prompt: 'Summarize risk' },
+    };
+  }
+  return { type: 'stop', reason: 'done' };
+};
+
+const result = await runAgentLoop(p, run.id, { driver, maxIterations: 10 });
+console.log(result.stoppedBy);   // 'driver'
+console.log(result.iterations);  // 3
+```
+
+Loop-created actions carry `loopIteration` and `loopReason` in their properties. Runs produced by loops replay like any other run.
+
+See [docs/LOOPS.md](./docs/LOOPS.md) for full documentation.
+
 ### Scoped Context
 
 ```typescript
@@ -337,6 +376,7 @@ src/
   llm.ts            — LLM adapter types
   model.ts          — ModelInferenceExecutor
   tool.ts           — ParallaxTool types & ToolExecutor
+  loop.ts           — agent loop types & runAgentLoop helper
   hash.ts           — canonical BLAKE3 hashing
   store.ts          — ParallaxStore interface
   store/memory.ts   — InMemoryParallaxStore
@@ -368,7 +408,7 @@ These are enforced, not best-effort:
 ```bash
 npm install
 npm run typecheck   # strict TypeScript
-npm test            # 62 tests across 13 suites
+npm test            # 74 tests across 14 suites
 npm run build       # ESM output with declaration files
 ```
 
