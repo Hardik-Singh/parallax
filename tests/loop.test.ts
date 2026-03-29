@@ -322,4 +322,20 @@ describe('AgentLoop', () => {
     expect(result.iterations).toBe(0);
     expect(result.steps).toHaveLength(0);
   });
+
+  it('throws when maxIterations is negative', async () => {
+    const driver: AgentLoopDriver = async () => ({ type: 'stop' });
+
+    await expect(runAgentLoop(p, runId, { driver, maxIterations: -1 })).rejects.toThrow(
+      'runAgentLoop requires maxIterations to be a non-negative integer',
+    );
+  });
+
+  it('throws when maxIterations is not an integer', async () => {
+    const driver: AgentLoopDriver = async () => ({ type: 'stop' });
+
+    await expect(
+      runAgentLoop(p, runId, { driver, maxIterations: 1.5 }),
+    ).rejects.toThrow('runAgentLoop requires maxIterations to be a non-negative integer');
+  });
 });

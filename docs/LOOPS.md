@@ -112,6 +112,7 @@ Two ways a loop ends:
 2. **`maxIterations` reached** — safety limit (defaults to 100)
 
 Check `result.stoppedBy` to distinguish the two.
+`maxIterations` must be a non-negative integer.
 
 ## Iteration Metadata
 

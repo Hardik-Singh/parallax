@@ -239,6 +239,7 @@ console.log(result.iterations);  // 3
 ```
 
 Loop-created actions carry `loopIteration` and `loopReason` in their properties. Runs produced by loops replay like any other run.
+`maxIterations` must be a non-negative integer.
 
 See [docs/LOOPS.md](./docs/LOOPS.md) for full documentation.
 

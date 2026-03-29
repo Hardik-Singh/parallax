@@ -66,6 +66,9 @@ export async function runAgentLoop(
   opts: AgentLoopOpts,
 ): Promise<AgentLoopResult> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  if (!Number.isInteger(maxIterations) || maxIterations < 0) {
+    throw new Error(`runAgentLoop requires maxIterations to be a non-negative integer, got: ${maxIterations}`);
+  }
   const steps: AgentLoopStepResult[] = [];
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
