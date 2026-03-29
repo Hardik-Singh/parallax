@@ -3,6 +3,7 @@ export { hash, canonicalize } from './hash.js';
 export { InMemoryParallaxStore } from './store/memory.js';
 export { ModelInferenceExecutor } from './model.js';
 export { ToolExecutor } from './tool.js';
+export { runAgentLoop } from './loop.js';
 
 export type {
   ObjectKind,
@@ -43,3 +44,11 @@ export type {
   CreateToolActionOpts,
   ToolActionResult,
 } from './tool.js';
+
+export type {
+  AgentLoopDecision,
+  AgentLoopDriver,
+  AgentLoopStepResult,
+  AgentLoopResult,
+  AgentLoopOpts,
+} from './loop.js';
