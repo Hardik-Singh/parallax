@@ -4,3 +4,4 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 examples/wildfire-coordination/output/*.json
+local-demo/

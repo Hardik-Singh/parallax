@@ -25,6 +25,7 @@ import type {
   Relation,
   RelationType,
   RunObject,
+  CheckpointOpts,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -934,13 +935,7 @@ export class Parallax {
       const originalAction = (await this.store.getObject(actionId)) as ActionObject;
       if (!originalAction) continue;
 
-      const canStructurallyShare =
-        !!originalAction.observed &&
-        (originalAction.effectful
-          ? skipEffectful
-          : originalAction.cachePolicy !== 'recompute');
-
-      if (canStructurallyShare) {
+      if (this.canStructurallyShare(originalAction, skipEffectful)) {
         await this.attachActionToRun(originalAction.id, newRun.id);
         if (originalAction.observed) {
           await this.syncRunArtifacts(newRun.id, originalAction.observed.producedArtifactIds);
@@ -1025,6 +1020,184 @@ export class Parallax {
   }
 
   // =========================================================================
+  // Checkpoints
+  // =========================================================================
+
+  async createCheckpoint(runId: string, opts: CheckpointOpts): Promise<ArtifactObject> {
+    const run = await this.getRun(runId);
+
+    let actionId = opts.actionId;
+    if (!actionId) {
+      const latest = await this.actions.latestForRun(runId);
+      if (!latest) throw new Error(`Run ${runId} has no actions to checkpoint`);
+      actionId = latest.id;
+    }
+
+    if (!run.actionIds.includes(actionId)) {
+      throw new Error(`Action ${actionId} not found in run ${runId}`);
+    }
+
+    // Snapshot artifact IDs produced by actions up to and including the checkpoint action
+    const branchIndex = run.actionIds.indexOf(actionId);
+    const prefixActionIds = run.actionIds.slice(0, branchIndex + 1);
+    const snapshotArtifactIds: string[] = [];
+    for (const aid of prefixActionIds) {
+      const action = (await this.store.getObject(aid)) as ActionObject;
+      if (action?.observed?.producedArtifactIds) {
+        for (const artId of action.observed.producedArtifactIds) {
+          if (!snapshotArtifactIds.includes(artId)) {
+            snapshotArtifactIds.push(artId);
+          }
+        }
+      }
+    }
+
+    return this.createArtifact({
+      type: 'checkpoint',
+      producedByActionId: actionId,
+      runId,
+      content: {
+        name: opts.name,
+        actionId,
+        artifactIds: snapshotArtifactIds,
+        ...(opts.summary ? { summary: opts.summary } : {}),
+      },
+      reusable: false,
+      properties: {},
+    });
+  }
+
+  async getCheckpoint(runId: string, name: string): Promise<ArtifactObject | undefined> {
+    const checkpoints = await this.artifacts.byType(runId, 'checkpoint');
+    return checkpoints.find((c) => (c.content as Record<string, unknown>).name === name);
+  }
+
+  async listCheckpoints(runId: string): Promise<ArtifactObject[]> {
+    return this.artifacts.byType(runId, 'checkpoint');
+  }
+
+  // =========================================================================
+  // Branch and replay from checkpoint
+  // =========================================================================
+
+  async branchFromCheckpoint(runId: string, checkpointName: string): Promise<RunObject> {
+    const checkpoint = await this.getCheckpoint(runId, checkpointName);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint "${checkpointName}" not found in run ${runId}`);
+    }
+    const actionId = (checkpoint.content as Record<string, unknown>).actionId as string;
+    return this.forkRun(runId, actionId);
+  }
+
+  async branchFromAction(runId: string, actionId: string): Promise<RunObject> {
+    return this.forkRun(runId, actionId);
+  }
+
+  async replayFromCheckpoint(
+    runId: string,
+    checkpointName: string,
+    opts?: { skipEffectful?: boolean },
+  ): Promise<RunObject> {
+    const checkpoint = await this.getCheckpoint(runId, checkpointName);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint "${checkpointName}" not found in run ${runId}`);
+    }
+    const actionId = (checkpoint.content as Record<string, unknown>).actionId as string;
+    return this.replayFromAction(runId, actionId, opts);
+  }
+
+  async replayFromAction(
+    runId: string,
+    fromActionId: string,
+    opts?: { skipEffectful?: boolean },
+  ): Promise<RunObject> {
+    const originalRun = await this.getRun(runId);
+    const skipEffectful = opts?.skipEffectful ?? true;
+
+    const branchIndex = originalRun.actionIds.indexOf(fromActionId);
+    if (branchIndex === -1) {
+      throw new Error(`Action ${fromActionId} not found in run ${runId}`);
+    }
+
+    const nonce = `replay-from-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const id = hash({ kind: 'Run', agentId: originalRun.agentId, nonce } as Record<string, unknown>);
+
+    const newRun: RunObject = {
+      id,
+      kind: 'Run',
+      type: 'Run',
+      agentId: originalRun.agentId,
+      status: 'active',
+      actionIds: [],
+      artifactIds: [],
+      parentRunId: runId,
+      branchFromActionId: fromActionId,
+      replayOfRunId: runId,
+      goalId: originalRun.goalId,
+      tags: originalRun.tags,
+      properties: {},
+      createdAt: new Date().toISOString(),
+    };
+    await this.store.putRun(newRun);
+    await this.store.putObject(newRun);
+    await this.linkInternal('REPLAY_OF', newRun.id, originalRun.id);
+
+    // Prefix: structurally share actions up to and including the branch point
+    const prefixActionIds = originalRun.actionIds.slice(0, branchIndex + 1);
+    for (const actionId of prefixActionIds) {
+      await this.attachActionToRun(actionId, newRun.id);
+      const actionObj = (await this.store.getObject(actionId)) as ActionObject;
+      if (actionObj?.observed?.producedArtifactIds) {
+        await this.syncRunArtifacts(newRun.id, actionObj.observed.producedArtifactIds);
+      }
+    }
+
+    // Tail: replay actions after the branch point
+    const tailActionIds = originalRun.actionIds.slice(branchIndex + 1);
+    for (const actionId of tailActionIds) {
+      const originalAction = (await this.store.getObject(actionId)) as ActionObject;
+      if (!originalAction) continue;
+
+      const canShare = this.canStructurallyShare(originalAction, skipEffectful);
+
+      if (canShare) {
+        await this.attachActionToRun(originalAction.id, newRun.id);
+        if (originalAction.observed) {
+          await this.syncRunArtifacts(newRun.id, originalAction.observed.producedArtifactIds);
+        }
+      } else {
+        const replayAction = await this.planAction(newRun.id, {
+          type: originalAction.type,
+          actionKind: originalAction.actionKind,
+          runId: newRun.id,
+          effectful: originalAction.effectful,
+          declared: originalAction.declared,
+          agentId: originalAction.agentId,
+          properties: originalAction.properties,
+          cachePolicy: originalAction.cachePolicy,
+          replayOfActionId: originalAction.id,
+          replayOfRunId: runId,
+        });
+
+        const executor = this.executors.get(replayAction.actionKind);
+        if (executor) {
+          await this.executeAction(replayAction.id);
+        }
+
+        await this.linkInternal('REPLAY_OF', replayAction.id, originalAction.id);
+      }
+    }
+
+    const updatedRun = await this.getRun(newRun.id);
+    updatedRun.status = 'replayed';
+    updatedRun.updatedAt = new Date().toISOString();
+    await this.store.putRun(updatedRun);
+
+    this.events.emit('run:replayed', updatedRun);
+    return updatedRun;
+  }
+
+  // =========================================================================
   // Events
   // =========================================================================
 
@@ -1072,6 +1245,17 @@ export class Parallax {
       return results;
     },
 
+    latestForRun: async (runId: string, type?: string): Promise<ActionObject | undefined> => {
+      const all = await this.actions.forRun(runId);
+      const filtered = type ? all.filter((a) => a.type === type) : all;
+      return filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+    },
+
+    byType: async (runId: string, type: string): Promise<ActionObject[]> => {
+      const all = await this.actions.forRun(runId);
+      return all.filter((a) => a.type === type);
+    },
+
     thatViolatedScope: async (runId: string): Promise<ActionObject[]> => {
       const div = await this.getDivergence(runId);
       const violationActionIds = new Set(
@@ -1102,6 +1286,17 @@ export class Parallax {
         if (obj?.kind === 'Artifact') results.push(obj as ArtifactObject);
       }
       return results;
+    },
+
+    latestForRun: async (runId: string, type?: string): Promise<ArtifactObject | undefined> => {
+      const all = await this.artifacts.forRun(runId);
+      const filtered = type ? all.filter((a) => a.type === type) : all;
+      return filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+    },
+
+    byType: async (runId: string, type: string): Promise<ArtifactObject[]> => {
+      const all = await this.artifacts.forRun(runId);
+      return all.filter((a) => a.type === type);
     },
 
     forGoal: async (goalId: string): Promise<ArtifactObject[]> => {
@@ -1165,6 +1360,15 @@ export class Parallax {
   // =========================================================================
   // Internal helpers
   // =========================================================================
+
+  private canStructurallyShare(action: ActionObject, skipEffectful: boolean): boolean {
+    return (
+      !!action.observed &&
+      (action.effectful
+        ? skipEffectful
+        : action.cachePolicy !== 'recompute')
+    );
+  }
 
   private async findProducedArtifact(
     action: ActionObject,

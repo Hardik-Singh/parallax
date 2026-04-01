@@ -25,6 +25,7 @@ export type {
   ActionExecutor,
   GraphProjection,
   ParallaxEventType,
+  CheckpointOpts,
 } from './types.js';
 
 export type {

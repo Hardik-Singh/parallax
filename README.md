@@ -312,16 +312,41 @@ Current replay behavior:
 
 Forking creates a new run with `parentRunId` and `branchFromActionId`, copying actions up to the branch point.
 
+### Checkpoints & Selective Replay
+
+```typescript
+// Create named checkpoints at stable points in a run
+createCheckpoint(runId, { name, actionId?, summary? }): Promise<ArtifactObject>
+getCheckpoint(runId, name): Promise<ArtifactObject | undefined>
+listCheckpoints(runId): Promise<ArtifactObject[]>
+
+// Branch from a checkpoint or action (prefix only, no replay)
+branchFromCheckpoint(runId, checkpointName): Promise<RunObject>
+branchFromAction(runId, actionId): Promise<RunObject>
+
+// Replay from a checkpoint or action (share prefix, replay tail)
+replayFromCheckpoint(runId, checkpointName, opts?): Promise<RunObject>
+replayFromAction(runId, actionId, opts?): Promise<RunObject>
+```
+
+Checkpoints are lightweight artifacts (`type: 'checkpoint'`) that snapshot the run state at a named point. Branching creates a new run sharing everything up to the checkpoint. Selective replay shares the prefix and re-executes only downstream actions.
+
+See [docs/CHECKPOINTS.md](./docs/CHECKPOINTS.md) for details.
+
 ### Operational Queries
 
 ```typescript
 p.actions.forRun(runId)
 p.actions.forAgent(agentId)
+p.actions.latestForRun(runId, type?)
+p.actions.byType(runId, type)
 p.actions.thatConsumed(artifactId)
 p.actions.thatProduced(artifactId)
 p.actions.thatViolatedScope(runId)
 
 p.artifacts.forRun(runId)
+p.artifacts.latestForRun(runId, type?)
+p.artifacts.byType(runId, type)
 p.artifacts.forGoal(goalId)
 p.artifacts.sharedAcrossRuns()
 
@@ -409,7 +434,7 @@ These are enforced, not best-effort:
 ```bash
 npm install
 npm run typecheck   # strict TypeScript
-npm test            # 74 tests across 14 suites
+npm test            # 90 tests across 15 suites
 npm run build       # ESM output with declaration files
 ```
 

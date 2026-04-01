@@ -147,6 +147,138 @@ describe('operational query APIs', () => {
     expect(sharedAcrossRuns.some((artifact) => artifact.id === shared.id)).toBe(true);
   });
 
+  it('actions.latestForRun returns the last action', async () => {
+    await p.planAction(runId, {
+      type: 'step-a',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 1 },
+    });
+    await p.planAction(runId, {
+      type: 'step-b',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 2 },
+    });
+
+    const latest = await p.actions.latestForRun(runId);
+    expect(latest).toBeDefined();
+    expect(latest!.type).toBe('step-b');
+  });
+
+  it('actions.latestForRun with type filter', async () => {
+    await p.planAction(runId, {
+      type: 'fetch',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: true,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+    await p.planAction(runId, {
+      type: 'analyze',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+
+    const latestFetch = await p.actions.latestForRun(runId, 'fetch');
+    expect(latestFetch).toBeDefined();
+    expect(latestFetch!.type).toBe('fetch');
+  });
+
+  it('actions.byType returns filtered actions', async () => {
+    await p.planAction(runId, {
+      type: 'fetch',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: true,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 1 },
+    });
+    await p.planAction(runId, {
+      type: 'analyze',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+    await p.planAction(runId, {
+      type: 'fetch',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: true,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 2 },
+    });
+
+    const fetches = await p.actions.byType(runId, 'fetch');
+    expect(fetches).toHaveLength(2);
+    expect(fetches.every((a) => a.type === 'fetch')).toBe(true);
+  });
+
+  it('artifacts.latestForRun returns the last artifact', async () => {
+    const a1 = await p.planAction(runId, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 1 },
+    });
+    await p.executeAction(a1.id);
+
+    const a2 = await p.planAction(runId, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: { n: 2 },
+    });
+    await p.executeAction(a2.id);
+
+    const latest = await p.artifacts.latestForRun(runId);
+    expect(latest).toBeDefined();
+    expect(latest!.kind).toBe('Artifact');
+  });
+
+  it('artifacts.byType returns filtered artifacts', async () => {
+    const a1 = await p.planAction(runId, {
+      type: 'step',
+      actionKind: 'ToolCall',
+      runId,
+      effectful: false,
+      declared: { inputs: [] },
+      agentId,
+      properties: {},
+    });
+    await p.executeAction(a1.id);
+
+    const outputs = await p.artifacts.byType(runId, 'output');
+    expect(outputs.length).toBeGreaterThanOrEqual(1);
+    expect(outputs.every((a) => a.type === 'output')).toBe(true);
+
+    const checkpoints = await p.artifacts.byType(runId, 'checkpoint');
+    expect(checkpoints).toHaveLength(0);
+  });
+
   it('runs.forAgent returns runs by agent', async () => {
     const runs = await p.runs.forAgent(agentId);
     expect(runs.length).toBeGreaterThanOrEqual(1);
