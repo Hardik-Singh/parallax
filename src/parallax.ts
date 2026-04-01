@@ -1015,6 +1015,7 @@ export class Parallax {
         await this.syncRunArtifacts(newRun.id, actionObj.observed.producedArtifactIds);
       }
     }
+    await this.shareRunArtifactsForActionIds(originalRun, newRun.id, actionsToCopy);
 
     return this.getRun(newRun.id);
   }
@@ -1151,6 +1152,7 @@ export class Parallax {
         await this.syncRunArtifacts(newRun.id, actionObj.observed.producedArtifactIds);
       }
     }
+    await this.shareRunArtifactsForActionIds(originalRun, newRun.id, prefixActionIds);
 
     // Tail: replay actions after the branch point
     const tailActionIds = originalRun.actionIds.slice(branchIndex + 1);
@@ -1165,6 +1167,7 @@ export class Parallax {
         if (originalAction.observed) {
           await this.syncRunArtifacts(newRun.id, originalAction.observed.producedArtifactIds);
         }
+        await this.shareRunArtifactsForActionIds(originalRun, newRun.id, [originalAction.id]);
       } else {
         const replayAction = await this.planAction(newRun.id, {
           type: originalAction.type,
@@ -1510,6 +1513,22 @@ export class Parallax {
   private async syncRunArtifacts(runId: string, artifactIds: string[]): Promise<void> {
     for (const artifactId of artifactIds) {
       await this.attachArtifactToRun(artifactId, runId);
+    }
+  }
+
+  private async shareRunArtifactsForActionIds(
+    originalRun: RunObject,
+    runId: string,
+    actionIds: string[],
+  ): Promise<void> {
+    const actionIdSet = new Set(actionIds);
+    for (const artifactId of originalRun.artifactIds) {
+      const obj = await this.store.getObject(artifactId);
+      if (!obj || obj.kind !== 'Artifact') continue;
+      const artifact = obj as ArtifactObject;
+      if (artifact.producedByActionId && actionIdSet.has(artifact.producedByActionId)) {
+        await this.attachArtifactToRun(artifact.id, runId);
+      }
     }
   }
 

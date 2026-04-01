@@ -215,6 +215,10 @@ describe('checkpoints, branching, and selective replay', () => {
     expect(branch.actionIds).toContain(a1.id);
     expect(branch.actionIds).toContain(a2.id);
     expect(branch.actionIds).not.toContain(a3.id);
+
+    const branchCheckpoints = await p.listCheckpoints(branch.id);
+    expect(branchCheckpoints).toHaveLength(1);
+    expect((branchCheckpoints[0].content as Record<string, unknown>).name).toBe('after-analyze');
   });
 
   // ---------------------------------------------------------------------------
@@ -266,6 +270,10 @@ describe('checkpoints, branching, and selective replay', () => {
     // Tail action was replayed — new action in run
     expect(replayed.actionIds).not.toContain(a2.id);
     expect(replayed.actionIds.length).toBe(2);
+
+    const replayedCheckpoints = await p.listCheckpoints(replayed.id);
+    expect(replayedCheckpoints).toHaveLength(1);
+    expect((replayedCheckpoints[0].content as Record<string, unknown>).name).toBe('after-fetch');
   });
 
   it('replayFromAction shares prefix, re-executes tail', async () => {

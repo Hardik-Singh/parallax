@@ -46,6 +46,7 @@ const all = await p.listCheckpoints(runId);
 ### Branch from a Checkpoint
 
 Creates a new run sharing all actions up to the checkpoint. The branched run is ready for new actions to be appended.
+Checkpoint artifacts anchored to the shared prefix are carried into the branch as well.
 
 ```typescript
 const branch = await p.branchFromCheckpoint(runId, 'analysis-complete');
@@ -63,6 +64,7 @@ const branch = await p.branchFromAction(runId, actionId);
 ### Replay from a Checkpoint
 
 Creates a new run that shares the prefix and replays (re-executes) all actions after the checkpoint. Effectful actions in the tail are structurally shared by default (`skipEffectful: true`).
+Checkpoint artifacts anchored to the shared prefix remain attached in the replayed run.
 
 ```typescript
 const replayed = await p.replayFromCheckpoint(runId, 'analysis-complete');
